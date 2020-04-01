@@ -1,6 +1,8 @@
 #include <ESP8266WiFi.h>
-#include <DHT.h>
 #include <PubSubClient.h>
+#include <DHT.h>
+#include <Thread.h>
+#include <ThreadController.h>
 
 #define WIFI_SSID ""
 #define WIFI_PASSWORD ""
@@ -8,74 +10,62 @@
 #define MQTT_PORT 1883
 #define MQTT_USER ""
 #define MQTT_PASS ""
-#define PIN_DATA 2
+#define MQTT_TEMP_TOPIC ""
+#define MQTT_HUMID_TOPIC ""
+#define PIN_DADOS 2
+#define LED_STATUS 1
 
 WiFiClient wifiClient;
 PubSubClient client(wifiClient);
-DHT dht(PIN_DATA, DHT11);
+ThreadController cpu = ThreadController();
+DHT dht(PIN_DADOS, DHT11);
 
-void setup() {
-  Serial.begin(115200);
-  delay(10);
-  Serial.println("Let' start now");
-
-  connectWifi();
-  connectMqtt();
-
-  dht.begin();
-}
-
-void loop() {
-  client.loop();
-
-  char temperature[5];
-  dtostrf(dht.readTemperature(), 4, 2, temperature);
-  client.publish("casa/sala/temperatura", temperature);
-  
-  char humidity[5];
-  dtostrf(dht.readHumidity(), 4, 2, humidity);
-  client.publish("casa/sala/umidade", humidity);
-
-  delay(5000);
-}
-
-void connectWifi() {
-  Serial.println("Connecting to wifi..");
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  while (WiFi.status() != WL_CONNECTED) {
-    Serial.print(".");
-    delay(1000);
-  }
-  Serial.println("");
-  Serial.print("Connected to ");
-  Serial.println(WIFI_SSID);
-  Serial.print("IP address: ");
-  Serial.println(WiFi.localIP());
-}
-
-void connectMqtt() {
-  uint8_t mac[6];
-  WiFi.macAddress(mac);
-  String clientName;
-  clientName += "esp8266-";
-  clientName += macToStr(mac);
-
-  client.setServer(MQTT_SERVER, MQTT_PORT);
-  client.setCallback(callback);
-
-  while (!client.connected()) {
-    if (client.connect((char*) clientName.c_str(), MQTT_USER, MQTT_PASS)) {
-      Serial.println("Connected to MQTT Server");
-    } else {
-      Serial.print("[FAILED] [ rc = ");
-      Serial.print(client.state() );
-      Serial.println(" : retrying in 1 seconds]");
-      delay(1000);
-    }
+Thread ledWifiThread = Thread();
+void ledWifiOnRun() {
+  if (WiFi.status() != WL_CONNECTED) {
+    digitalWrite(LED_STATUS, !digitalRead(LED_STATUS));
   }
 }
 
-void callback(char* topic, byte* payload, unsigned int length) {
+Thread ledMqttThread = Thread();
+void ledMqttOnRun() {
+  if (WiFi.status() == WL_CONNECTED && !client.connected()) {
+    digitalWrite(LED_STATUS, !digitalRead(LED_STATUS));
+  }
+}
+
+Thread ledOkThread = Thread();
+void ledOkOnRun() {
+  if (WiFi.status() == WL_CONNECTED && client.connected()) {
+    digitalWrite(LED_STATUS, LOW);
+  }
+}
+
+Thread wifiThread = Thread();
+void wifiOnRun() {
+  if (WiFi.status() != WL_CONNECTED) {
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  }
+}
+
+Thread mqttThread = Thread();
+void mqttOnRun() {
+  if (WiFi.status() != WL_CONNECTED) {
+    return;
+  }
+  if (!client.connected()) {
+    uint8_t mac[6];
+    WiFi.macAddress(mac);
+    String clientName;
+    clientName += "esp8266-";
+    clientName += macToStr(mac);
+    client.setServer(MQTT_SERVER, MQTT_PORT);
+    client.setCallback(mqttCallback);
+    client.connect((char*) clientName.c_str(), MQTT_USER, MQTT_PASS);
+  }
+}
+
+void mqttCallback(char* topic, byte* payload, unsigned int length) {
 }
 
 String macToStr(const uint8_t* mac)
@@ -87,4 +77,59 @@ String macToStr(const uint8_t* mac)
       result += ':';
   }
   return result;
+}
+
+Thread readDHTAndPublishThread = Thread();
+void readDHTAndPublishOnRun() {
+  if (WiFi.status() != WL_CONNECTED || !client.connected())
+    return;
+
+  digitalWrite(LED_STATUS, !digitalRead(LED_STATUS));
+
+  char temperature[5];
+  dtostrf(dht.readTemperature(), 4, 2, temperature);
+  client.publish(MQTT_TEMP_TOPIC, temperature);
+
+  char humidity[5];
+  dtostrf(dht.readHumidity(), 4, 2, humidity);
+  client.publish(MQTT_HUMID_TOPIC, humidity);
+
+  delay(10);
+  digitalWrite(LED_STATUS, !digitalRead(LED_STATUS));
+}
+
+void setup() {
+  pinMode(LED_STATUS, OUTPUT);
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  dht.begin();
+
+  ledWifiThread.setInterval(100);
+  ledWifiThread.onRun(ledWifiOnRun);
+
+  ledMqttThread.setInterval(500);
+  ledMqttThread.onRun(ledMqttOnRun);
+
+  ledOkThread.setInterval(1000);
+  ledOkThread.onRun(ledOkOnRun);
+
+  wifiThread.setInterval(20000);
+  wifiThread.onRun(wifiOnRun);
+
+  mqttThread.setInterval(10000);
+  mqttThread.onRun(mqttOnRun);
+
+  readDHTAndPublishThread.setInterval(5000);
+  readDHTAndPublishThread.onRun(readDHTAndPublishOnRun);
+
+  cpu.add(&ledWifiThread);
+  cpu.add(&ledMqttThread);
+  cpu.add(&ledOkThread);
+  cpu.add(&wifiThread);
+  cpu.add(&mqttThread);
+  cpu.add(&readDHTAndPublishThread);
+}
+
+void loop() {
+  cpu.run();
+  client.loop();
 }
