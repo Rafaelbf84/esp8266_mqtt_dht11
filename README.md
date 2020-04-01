@@ -8,10 +8,11 @@ A code for ESP8266-01 thar use a DHT11 sensor and publish the temperature and hy
 
 This code depends on:
 - [Adafruit DHT Humidity & Temperature Sensor Library](https://github.com/adafruit/DHT-sensor-library)
+- [ArduinoThread](https://github.com/ivanseidel/ArduinoThread)
 
 ## Features 
 
-The code simply connect to the wifi, connect to the MQQT broker and publish  
+The code simply connect to the wifi, connect to the MQQT broker and publish .
 
 ## Contributing
 
